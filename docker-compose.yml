@@ -3,6 +3,4 @@ services:
     build: .
     ports:
       - "8000:8000"
-    environment:
-      - TRANSCRIPTHQ_API_KEY=${TRANSCRIPTHQ_API_KEY:-}  # optional for now
     restart: unless-stopped

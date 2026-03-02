@@ -5,7 +5,6 @@ from pydantic import BaseModel
 import os
 import tempfile
 from app.transcribers.youtube import YouTubeTranscriber
-from app.transcribers.transcripthq import TranscriptHQTranscriber
 from app.transcribers.local_file import LocalFileTranscriber
 from app.utils import detect_source, VideoSource
 
@@ -68,8 +67,8 @@ def transcribe(request: TranscribeRequest, response: Response, debug: bool = Fal
 
     if source == VideoSource.YOUTUBE:
         transcriber = YouTubeTranscriber()
-    elif source == VideoSource.OTHER:
-        transcriber = TranscriptHQTranscriber()
+    # elif source == VideoSource.OTHER:
+    #     transcriber = TranscriptHQTranscriber()
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported video URL: {request.url}")
 
@@ -126,7 +125,11 @@ def transcribe(request: TranscribeRequest, response: Response, debug: bool = Fal
 
 
 @app.post("/transcribe-file", response_model=TranscribeResponse)
-async def transcribe_file(file: UploadFile = File(...), language: str = Form("en")):
+async def transcribe_file(
+    file: UploadFile = File(...),
+    language: str = Form("en"),
+    response: Response = None,  # injected by FastAPI for setting headers
+):
     """
     Transcribe a local audio or video file.
     
@@ -135,6 +138,7 @@ async def transcribe_file(file: UploadFile = File(...), language: str = Form("en
     Args:
         file: Audio or video file (multipart upload)
         language: Language code (default: "en")
+        response: FastAPI Response object for adding headers
     
     Returns:
         Transcription with segments and full text.

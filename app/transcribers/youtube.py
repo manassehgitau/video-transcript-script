@@ -25,11 +25,46 @@ yt_dlp_logger.setLevel(logging.CRITICAL)
 # Module logger
 logger = logging.getLogger("app.youtube")
 
+
+def _detect_device() -> tuple[str, str, int]:
+    """Detect best device for Whisper inference.
+    
+    Returns (device, compute_type, cpu_threads).
+    - GPU (CUDA): device="cuda", compute_type="float16", cpu_threads=1
+    - CPU: device="cpu", compute_type="int8", cpu_threads=max cores-1
+    """
+    import os
+    cpu_threads = max(1, (os.cpu_count() or 4) - 1)
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logger.info("CUDA GPU detected. Using device=cuda, compute_type=float16")
+            return "cuda", "float16", 1
+    except ImportError:
+        pass
+    
+    logger.info("Using CPU with int8 quantization, cpu_threads=%d", cpu_threads)
+    return "cpu", "int8", cpu_threads
+
+
 # Initialize Whisper model once at module level for reuse across requests
 _whisper_model = None
+_whisper_device = "cpu"
+_whisper_compute_type = "int8"
+_whisper_cpu_threads = 4
+
 if WHISPER_AVAILABLE:
     try:
-        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+        _whisper_device, _whisper_compute_type, _whisper_cpu_threads = _detect_device()
+        _whisper_model = WhisperModel(
+            "small",
+            device=_whisper_device,
+            compute_type=_whisper_compute_type,
+            cpu_threads=_whisper_cpu_threads,
+        )
+        logger.info("Whisper model loaded: device=%s, compute_type=%s, cpu_threads=%d",
+                    _whisper_device, _whisper_compute_type, _whisper_cpu_threads)
     except Exception as e:
         print(f"Warning: Failed to initialize Whisper model: {e}. Fallback to YouTube captions only.")
 
@@ -84,7 +119,7 @@ class YouTubeTranscriber:
                         continue
             except Exception:
                 pass
-            
+
             # YouTube captions unavailable, fall back to Whisper
             logger.info("Falling back to Whisper for %s", video_id)
             return self._transcribe_with_whisper(url, language)
@@ -92,6 +127,13 @@ class YouTubeTranscriber:
         except TranscriptsDisabled:
             # Captions explicitly disabled, fall back to Whisper
             logger.info("Transcripts disabled for %s; falling back to Whisper", video_id)
+            return self._transcribe_with_whisper(url, language)
+
+        except Exception as e:
+            # Catch parsing/network errors from youtube_transcript_api (e.g. empty responses
+            # that cause ElementTree ParseError) and fall back to Whisper instead of
+            # bubbling the exception to the caller.
+            logger.warning("Error fetching captions for %s via youtube-transcript-api: %s", video_id, e)
             return self._transcribe_with_whisper(url, language)
 
     def _transcribe_with_whisper(self, url: str, language: str = "en") -> list[dict]:
@@ -121,9 +163,18 @@ class YouTubeTranscriber:
             temp_audio_path, temp_audio_dir = self._download_audio(url)
             logger.info("Downloaded audio to %s", temp_audio_path)
             
-            # Step 2: Transcribe using Whisper
-            logger.info("Starting Whisper transcription for %s", temp_audio_path)
-            segments, _ = _whisper_model.transcribe(temp_audio_path, language=language)
+            # Step 2: Transcribe using Whisper with speed optimizations
+            # - beam_size=1: greedy decoding (fastest, minor accuracy tradeoff)
+            # - vad_filter=True: skip silence (big speedup on videos with pauses)
+            logger.info("Starting Whisper transcription for %s (beam_size=1, vad_filter=True)", temp_audio_path)
+            segments, info = _whisper_model.transcribe(
+                temp_audio_path,
+                language=language,
+                beam_size=1,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 500},
+            )
+            logger.info("Audio duration: %.1fs", info.duration)
             # faster-whisper may return a generator/iterator for segments; materialize to list
             try:
                 segments = list(segments)
