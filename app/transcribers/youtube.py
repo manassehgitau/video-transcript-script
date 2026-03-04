@@ -3,7 +3,14 @@ import os
 import logging
 import glob
 import shutil
-from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+    YT_TRANSCRIPT_AVAILABLE = True
+except Exception:
+    YouTubeTranscriptApi = None
+    NoTranscriptFound = Exception
+    TranscriptsDisabled = Exception
+    YT_TRANSCRIPT_AVAILABLE = False
 from app.utils import extract_youtube_video_id
 
 try:
@@ -84,6 +91,11 @@ class YouTubeTranscriber:
         """
         video_id = extract_youtube_video_id(url)
         logger.info("transcribe called for url=%s video_id=%s language=%s", url, video_id, language)
+
+        # If the youtube-transcript-api package isn't installed, skip directly to Whisper
+        if not YT_TRANSCRIPT_AVAILABLE:
+            logger.info("youtube-transcript-api not installed; using Whisper fallback for %s", video_id)
+            return self._transcribe_with_whisper(url, language)
 
         # Step 1: Try YouTube captions first
         try:
