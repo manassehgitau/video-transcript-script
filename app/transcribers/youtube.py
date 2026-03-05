@@ -245,8 +245,14 @@ class YouTubeTranscriber:
         try:
             logger.info("Starting yt-dlp download for %s into %s", url, temp_dir)
 
-            # Allow user to provide a cookies file via environment variable for authenticated/download-protected videos
+            # Allow user to provide cookies for authenticated/download-protected videos.
+            # Supported options (priority order):
+            # - YTDLP_COOKIEFILE: path to a cookies.txt file already available inside the container
+            # - YTDLP_COOKIE_B64: base64-encoded cookies.txt content (useful for secrets)
+            # - YTDLP_COOKIES: raw cookies.txt content (multiline allowed)
             cookiefile = os.environ.get("YTDLP_COOKIEFILE")
+            cookie_b64 = os.environ.get("YTDLP_COOKIE_B64")
+            cookie_content = os.environ.get("YTDLP_COOKIES")
 
             # Common http headers to resemble a real browser
             http_headers = {
@@ -283,7 +289,25 @@ class YouTubeTranscriber:
                 "progress_hooks": [self._progress_hook],
             }
 
-            if cookiefile:
+            # If a base64 or raw cookie is provided, write it into the temp_dir for yt-dlp to use.
+            if cookie_b64:
+                try:
+                    import base64
+                    cookie_path = os.path.join(temp_dir, "cookies.txt")
+                    with open(cookie_path, "wb") as cf:
+                        cf.write(base64.b64decode(cookie_b64))
+                    primary_opts["cookiefile"] = cookie_path
+                except Exception as e:
+                    logger.warning("Failed to decode YTDLP_COOKIE_B64: %s", e)
+            elif cookie_content:
+                try:
+                    cookie_path = os.path.join(temp_dir, "cookies.txt")
+                    with open(cookie_path, "w", encoding="utf-8") as cf:
+                        cf.write(cookie_content)
+                    primary_opts["cookiefile"] = cookie_path
+                except Exception as e:
+                    logger.warning("Failed to write YTDLP_COOKIES content: %s", e)
+            elif cookiefile:
                 primary_opts["cookiefile"] = cookiefile
 
             # Fallback options if primary attempt fails (try a more permissive extractor)
