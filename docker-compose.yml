@@ -7,7 +7,7 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # No `command` override — lets ENTRYPOINT (start.sh) run so bgutil starts first
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
@@ -18,6 +18,7 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
-    command: ["arq", "app.queue.worker.WorkerSettings"]
+    # Worker also needs bgutil running for yt-dlp PO token fetching
+    entrypoint: ["/bin/bash", "-c", "npx bgutil-ytdlp-pot-provider serve & exec arq app.queue.worker.WorkerSettings"]
 
 volumes: {}
