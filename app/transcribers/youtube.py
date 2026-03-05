@@ -99,10 +99,17 @@ class YouTubeTranscriber:
 
         # Step 1: Try YouTube captions first
         try:
+            # Pass cookies to youtube-transcript-api if available (helps with bot detection in prod)
+            cookiefile = os.environ.get("YTDLP_COOKIEFILE")
+            kwargs = {}
+            if cookiefile and os.path.exists(cookiefile):
+                kwargs["cookies"] = cookiefile
+
             # Try to get transcript in requested language first
             transcript = YouTubeTranscriptApi.get_transcript(
                 video_id,
                 languages=[language, "en"],  # fallback to English
+                **kwargs,
             )
             logger.info("Found YouTube captions for %s (language=%s)", video_id, language)
             # mark method used
@@ -248,6 +255,13 @@ class YouTubeTranscriber:
             # Allow user to provide a cookies file via environment variable for authenticated/download-protected videos
             cookiefile = os.environ.get("YTDLP_COOKIEFILE")
 
+            # Optional po_token + visitor_data for YouTube's bot-mitigation layer.
+            # These can be obtained from a logged-in browser session and set as env vars:
+            #   YTDLP_PO_TOKEN   — PO token (OAuth2 proof-of-origin token)
+            #   YTDLP_VISITOR_DATA — visitor_data string from the same session
+            po_token = os.environ.get("YTDLP_PO_TOKEN")
+            visitor_data = os.environ.get("YTDLP_VISITOR_DATA")
+
             # Common http headers to resemble a real browser
             http_headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -266,15 +280,15 @@ class YouTubeTranscriber:
                 def error(self, msg):
                     logger.error(msg)
 
-            # Primary options
-            primary_opts = {
+            # Base options shared by all attempts
+            base_opts = {
                 "format": "bestaudio/best",
                 "quiet": True,
                 "no_warnings": True,
                 "outtmpl": outtmpl,
                 "http_headers": http_headers,
-                "socket_timeout": 10,
-                "retries": 1,
+                "socket_timeout": 30,
+                "retries": 3,
                 "socket_family": 4,
                 "skip_unavailable_fragments": True,
                 "nocheckcertificate": True,
@@ -283,19 +297,36 @@ class YouTubeTranscriber:
                 "progress_hooks": [self._progress_hook],
             }
 
-            if cookiefile:
-                primary_opts["cookiefile"] = cookiefile
+            if cookiefile and os.path.exists(cookiefile):
+                base_opts["cookiefile"] = cookiefile
+                logger.info("Using cookies file: %s", cookiefile)
 
-            # Fallback options if primary attempt fails (try a more permissive extractor)
-            fallback_opts = dict(primary_opts)
-            fallback_opts.update({
-                "format": "bestaudio/best",
-                "noplaylist": True,
-                "force_generic_extractor": True,
-                "allow_unplayable_formats": True,
-            })
+            # Build extractor_args for po_token if provided
+            def _build_extractor_args(player_client: str) -> dict:
+                args = {"player_client": [player_client]}
+                if po_token and visitor_data:
+                    args["po_token"] = [f"{player_client}+{po_token}"]
+                    args["visitor_data"] = [visitor_data]
+                    logger.info("Using po_token for player_client=%s", player_client)
+                return {"youtube": args}
 
-            attempts = [primary_opts, fallback_opts]
+            # Attempt 1: tv_embedded client — avoids bot checks, no sign-in required
+            attempt1 = dict(base_opts)
+            attempt1["extractor_args"] = _build_extractor_args("tv_embedded")
+
+            # Attempt 2: android client — another reliable bypass
+            attempt2 = dict(base_opts)
+            attempt2["extractor_args"] = _build_extractor_args("android")
+
+            # Attempt 3: ios client
+            attempt3 = dict(base_opts)
+            attempt3["extractor_args"] = _build_extractor_args("ios")
+
+            # Attempt 4: mweb (mobile web) — last resort before giving up
+            attempt4 = dict(base_opts)
+            attempt4["extractor_args"] = _build_extractor_args("mweb")
+
+            attempts = [attempt1, attempt2, attempt3, attempt4]
 
             last_exception = None
             for attempt_no, opts in enumerate(attempts, start=1):
@@ -366,4 +397,3 @@ class YouTubeTranscriber:
             print(f"[Transcriber] Downloading: {d.get('_percent_str', 'N/A')} at {d.get('_speed_str', 'N/A')}")
         elif d['status'] == 'finished':
             print(f"[Transcriber] Download finished, now processing...")
-

@@ -2,6 +2,11 @@ FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js (required by bgutil provider)
+RUN apt-get install -y nodejs
+
+RUN pip install yt-dlp-get-pot bgutil-ytdlp-pot-provider
+
 WORKDIR /service
 
 COPY requirements.txt .
