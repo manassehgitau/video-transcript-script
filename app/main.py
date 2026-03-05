@@ -16,6 +16,7 @@ import logging
 import os
 import tempfile
 import uuid
+import asyncio
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -146,18 +147,26 @@ async def _wait_for_result(job_id: str, timeout: int = settings.job_timeout) -> 
     if raw:
         return json.loads(raw)
 
-    # Subscribe and wait
+    # Subscribe and wait (with timeout to avoid hanging connections)
     pubsub = _redis_pubsub.pubsub()
     await pubsub.subscribe(channel)
     try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                return json.loads(message["data"])
+        async def _listen_for_message() -> dict:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    return json.loads(message["data"])
+
+        try:
+            return await asyncio.wait_for(_listen_for_message(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Re-check stored result (in case it was published before we subscribed)
+            raw = await _redis_pubsub.get(f"result:{job_id}")
+            if raw:
+                return json.loads(raw)
+            return {"status": "error", "job_id": job_id, "detail": "Timed out waiting for result"}
     finally:
         await pubsub.unsubscribe(channel)
         await pubsub.aclose()
-
-    return {"status": "error", "job_id": job_id, "detail": "Timed out waiting for result"}
 
 
 # ---------------------------------------------------------------------------
