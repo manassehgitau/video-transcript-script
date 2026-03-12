@@ -1,49 +1,61 @@
-FROM python:3.12-slim
+# ─────────────────────────────────────────────
+# Stage 1: Python dependencies
+# ─────────────────────────────────────────────
+FROM python:3.11-slim AS python-deps
 
-# Install system deps in a single layer to reduce image size.
-# Use --no-install-recommends to avoid extra packages.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        ffmpeg \
+WORKDIR /app
+
+# System packages needed by faster-whisper / yt-dlp / ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    git \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20.x from NodeSource (required by bgutil provider)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get update && apt-get install -y --no-install-recommends nodejs && \
-    rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-WORKDIR /service
 
-# Copy dependency manifest first so Docker can cache installs
-COPY requirements.txt ./
+# ─────────────────────────────────────────────
+# Stage 2: Final image (Python + Node.js)
+# ─────────────────────────────────────────────
+FROM python:3.11-slim
 
-# Upgrade pip, install Python requirements without cache
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
 
-# Install small helper packages after base requirements to avoid invalidating cache
-RUN pip install --no-cache-dir yt-dlp-get-pot bgutil-ytdlp-pot-provider
+# Runtime system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 (required by bgutil-ytdlp-pot-provider)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages from build stage
+COPY --from=python-deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=python-deps /usr/local/bin /usr/local/bin
+
+# Install bgutil-ytdlp-pot-provider globally
+RUN npm install -g bgutil-ytdlp-pot-provider
 
 # Copy application code
-COPY app/ ./app/
+COPY . .
 
-# Copy start script and make executable
-COPY start.sh /start.sh
-RUN chmod +x /start.sh
+# Pre-download the faster-whisper model so container starts quickly
+# Comment this out if you want a smaller image and are OK with first-run delay
+# RUN python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu')"
 
-# Create a non-root user and use it for running the app
-RUN useradd --create-home --shell /bin/false appuser && chown -R appuser:appuser /service /start.sh
+# Make start scripts executable
+RUN chmod +x start.sh start-worker.sh
 
-# Environment for better Python behavior in containers
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+# Cloud Run injects PORT env var; default to 8000
+ENV PORT=8000
 
-EXPOSE 8000
-
-# Use the start script as entrypoint (start.sh should run the server or manage env setup)
-USER appuser
-ENTRYPOINT ["/start.sh"]
+# Default: run the web server
+# Override CMD to "worker" when deploying the worker service
+CMD ["./start.sh"]

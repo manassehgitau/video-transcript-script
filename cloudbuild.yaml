@@ -1,0 +1,77 @@
+steps:
+  # ── Step 1: Build the Docker image ──────────────────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build"
+    args:
+      - build
+      - -t
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}"
+      - -t
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest"
+      - .
+
+  # ── Step 2: Push image to Artifact Registry ──────────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push"
+    args:
+      - push
+      - --all-tags
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}"
+
+  # ── Step 3: Deploy the web (FastAPI) service ─────────────────────────────────
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: "deploy-web"
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_WEB_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8000
+      - --memory=2Gi
+      - --cpu=2
+      - --min-instances=0
+      - --max-instances=5
+      - --timeout=3600
+      - --set-env-vars=REDIS_URL=${_REDIS_URL}
+      - --command=./start.sh
+
+  # ── Step 4: Deploy the worker service ────────────────────────────────────────
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: "deploy-worker"
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_WORKER_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --port=8080
+      - --memory=4Gi
+      - --cpu=4
+      - --min-instances=1
+      - --max-instances=3
+      - --timeout=3600
+      - --set-env-vars=REDIS_URL=${_REDIS_URL}
+      - --command=./start-worker.sh
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest"
+
+substitutions:
+  _REGION: us-central1
+  _REPO: video-transcript
+  _IMAGE: video-transcript-app
+  _WEB_SERVICE: video-transcript-web
+  _WORKER_SERVICE: video-transcript-worker
+  # Set _REDIS_URL in Cloud Build trigger substitutions (do NOT hardcode secrets here)
+  _REDIS_URL: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
