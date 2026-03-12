@@ -40,8 +40,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 COPY --from=python-deps /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=python-deps /usr/local/bin /usr/local/bin
 
-# Install bgutil-ytdlp-pot-provider globally
-RUN npm install -g bgutil-ytdlp-pot-provider
+# Install bgutil-ytdlp-pot-provider globally from the GitHub repo
+# (package isn't available in the public npm registry)
+RUN npm install -g git+https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
 
 # Copy application code
 COPY . .
