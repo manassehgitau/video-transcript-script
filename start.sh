@@ -2,7 +2,7 @@
 set -e
 
 # Start bgutil PO token server in background (needed for yt-dlp YouTube downloads)
-npx bgutil-ytdlp-pot-provider serve &
+node /opt/bgutil/server/build/main.js &
 BGUTIL_PID=$!
 echo "bgutil server started (PID $BGUTIL_PID)"
 
